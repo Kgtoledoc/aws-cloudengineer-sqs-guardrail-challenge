@@ -1,0 +1,54 @@
+name: Deploy SQS Guardrail
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ${{ secrets.AWS_REGION }}
+
+      - name: Create Permission Boundary Policy
+        run: |
+          aws iam create-policy \
+            --policy-name SQSGuardrailPermissionBoundary \
+            --policy-document file://permission_boundary.json \
+            || echo "Policy already exists"
+
+      - name: Package Lambda Function
+        run: |
+          cd lambda_function
+          zip -r lambda_function.zip lambda_function.py
+          aws s3 cp lambda_function.zip s3://your-s3-bucket/
+
+      - name: Deploy CloudFormation Stack
+        run: |
+          aws cloudformation deploy \
+            --stack-name SQSGuardrail \
+            --template-file template.yaml \
+            --capabilities CAPABILITY_NAMED_IAM \
+            --parameter-overrides \
+                LambdaRuntime=python3.9 \
+                MemorySize=128 \
+                PermissionBoundaryArn=arn:aws:iam::$(aws sts get-caller-identity --query "Account" --output text):policy/SQSGuardrailPermissionBoundary \
+                SNSTopicArn=${{ secrets.SNS_TOPIC_ARN }} 
+                OrganizationUnitId=${{ secrets.ORGANIZATION_UNIT_ID }}\
+                S3BucketName=${{ secrets.S3_BUCKET_NAME }} \
+
+      - name: Post Deployment Verification
+        run: |
+          aws cloudformation describe-stacks --stack-name SQSGuardrail

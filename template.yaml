@@ -1,0 +1,116 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template to enforce SQS security compliance guardrails.'
+
+Parameters:
+  LambdaRuntime:
+    Type: String
+    Default: python3.9
+    Description: 'Runtime for the Lambda function'
+  MemorySize:
+    Type: Number
+    Default: 128
+    Description: 'Memory size for the Lambda function (MB)'
+  PermissionBoundaryArn:
+    Type: String
+    Description: 'ARN of the permission boundary policy'
+  SNSTopicArn:
+    Type: String
+    Default: ''
+    Description: 'Optional ARN for SNS topic alerts'
+  OrganizationUnitId:
+    Type: String
+    Default: ''
+    Description: 'Organizational Unit ID'
+  S3BucketName:
+    Type: String
+    Default: ''
+    Description: 'Bucket Name to storing Lambda code'
+
+Resources:
+  LambdaExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      PermissionsBoundary: !Ref PermissionBoundaryArn
+      Policies:
+        - PolicyName: LambdaSQSPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - sqs:GetQueueAttributes
+                  - sqs:ListQueues
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: '*' 
+              - Effect: Allow
+                Action:
+                  - sns:Publish
+                Resource: !Ref SNSTopicArn
+
+  SQSComplianceLambda:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: SQSComplianceGuardrail
+      Runtime: !Ref LambdaRuntime
+      Handler: lambda_function.lambda_handler
+      Code:
+        S3Bucket: !Ref S3BucketName
+        S3Key: 'lambda_function.zip'
+      Role: !GetAtt LambdaExecutionRole.Arn
+      MemorySize: !Ref MemorySize
+      Timeout: 10
+      Environment:
+        Variables:
+          SNS_TOPIC_ARN: !Ref SNSTopicArn
+
+  EventBridgeRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Description: 'Trigger Lambda on SQS queue creation'
+      EventPattern:
+        source:
+          - aws.sqs
+        detail-type:
+          - AWS API Call via CloudTrail
+        detail:
+          eventSource:
+            - sqs.amazonaws.com
+          eventName:
+            - CreateQueue
+      Targets:
+        - Arn: !GetAtt SQSComplianceLambda.Arn
+          Id: TargetLambda
+
+  LambdaInvokePermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !Ref SQSComplianceLambda
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt EventBridgeRule.Arn
+
+  SQSControlTowerGuardrail:
+    Type: AWS::ControlTower::EnabledControl
+    Properties:
+      ControlIdentifier: 'arn:aws:controltower:us-east-1::control/sqs-dead-letter-queue-required'
+      TargetIdentifier: !Ref OrganizationUnitId
+
+Outputs:
+  LambdaFunctionArn:
+    Description: 'ARN of the Lambda function'
+    Value: !GetAtt SQSComplianceLambda.Arn
+  IAMRoleArn:
+    Description: 'ARN of the IAM Role for Lambda'
+    Value: !GetAtt LambdaExecutionRole.Arn
