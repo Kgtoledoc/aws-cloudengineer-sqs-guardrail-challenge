@@ -103,5 +103,5 @@ This project includes a GitHub Actions workflow for automating deployments.
 If you'd like to improve this project, fork the repository, create a new branch, and submit a **pull request**.
 
 ## Author
-[Your Name] - 2025
+Kevin Toledo - 2025
 
